@@ -9,125 +9,173 @@ contract TokenFactoryTest is Test {
     TokenFactory public factory;
     address public alice;
     address public bob;
+    address public owner;
 
     event TokenCreated(address indexed tokenAddress, string name, string symbol, address owner);
+    event TokenAddedToAVS(address indexed tokenAddress);
+    event TokenRemovedFromAVS(address indexed tokenAddress);
 
     function setUp() public {
+        // Deploy the factory and set up test addresses
+        owner = address(this); // The deployer is the owner
         factory = new TokenFactory();
         alice = makeAddr("alice");
         bob = makeAddr("bob");
     }
 
     function testCreateToken() public {
-        vm.startPrank(alice);
-        
-        address tokenAddress = factory.createToken("My Token", "MTK", 1000000 * 1e18);
+        vm.startPrank(owner);
+
+        // Create a token with default owner (msg.sender)
+        address tokenAddress = factory.createToken("My Token", "MTK", 1_000_000 * 1e18, address(0));
         Token newToken = Token(tokenAddress);
-        
+
         // Verify token properties
         assertEq(newToken.name(), "My Token");
         assertEq(newToken.symbol(), "MTK");
-        assertEq(newToken.totalSupply(), 1000000 * 1e18);
-        assertEq(newToken.balanceOf(alice), 1000000 * 1e18);
+        assertEq(newToken.totalSupply(), 1_000_000 * 1e18);
+        assertEq(newToken.balanceOf(owner), 1_000_000 * 1e18);
+        assertEq(newToken.owner(), owner);
+
+        // Verify AVSTokens mapping
+        assertTrue(factory.AVSTokens(tokenAddress));
+
+        // Verify token tracking
+        address[] memory userTokens = factory.getTokensByUser(owner);
+        assertEq(userTokens.length, 1);
+        assertEq(userTokens[0], tokenAddress);
+        assertEq(factory.getUserTokenCount(owner), 1);
+
+        vm.stopPrank();
+    }
+
+    function testCreateTokenWithCustomOwner() public {
+        vm.startPrank(owner);
+
+        // Create a token with custom owner (alice)
+        address tokenAddress = factory.createToken("Custom Token", "CTKN", 1_000_000 * 1e18, alice);
+        Token newToken = Token(tokenAddress);
+
+        // Verify token properties
+        assertEq(newToken.name(), "Custom Token");
+        assertEq(newToken.symbol(), "CTKN");
+        assertEq(newToken.totalSupply(), 1_000_000 * 1e18);
+        assertEq(newToken.balanceOf(alice), 1_000_000 * 1e18);
         assertEq(newToken.owner(), alice);
-        
+
+        // Verify AVSTokens mapping
+        assertTrue(factory.AVSTokens(tokenAddress));
+
         // Verify token tracking
         address[] memory userTokens = factory.getTokensByUser(alice);
         assertEq(userTokens.length, 1);
         assertEq(userTokens[0], tokenAddress);
         assertEq(factory.getUserTokenCount(alice), 1);
-        
+
         vm.stopPrank();
     }
 
     function testMultipleTokenCreation() public {
-        // alice creates a token
-        vm.prank(alice);
-        address token1Address = factory.createToken("Token1", "TK1", 1000000 * 1e18);
+        vm.startPrank(owner);
+
+        // Create tokens for different users
+        address token1Address = factory.createToken("Token1", "TK1", 1_000_000 * 1e18, alice);
+        address token2Address = factory.createToken("Token2", "TK2", 2_000_000 * 1e18, bob);
+
         Token token1 = Token(token1Address);
-        
-        // bob creates a different token
-        vm.prank(bob);
-        address token2Address = factory.createToken("Token2", "TK2", 2000000 * 1e18);
         Token token2 = Token(token2Address);
-        
+
         // Verify tokens are different and have correct properties
         assertTrue(token1Address != token2Address);
         assertEq(token1.owner(), alice);
         assertEq(token2.owner(), bob);
-        assertEq(token1.balanceOf(alice), 1000000 * 1e18);
-        assertEq(token2.balanceOf(bob), 2000000 * 1e18);
+        assertEq(token1.balanceOf(alice), 1_000_000 * 1e18);
+        assertEq(token2.balanceOf(bob), 2_000_000 * 1e18);
 
         // Verify token tracking for both users
         assertEq(factory.getUserTokenCount(alice), 1);
         assertEq(factory.getUserTokenCount(bob), 1);
-        
+
         // Verify all tokens array
         address[] memory allTokens = factory.getAllTokens();
         assertEq(allTokens.length, 2);
         assertEq(allTokens[0], token1Address);
         assertEq(allTokens[1], token2Address);
+
+        vm.stopPrank();
     }
 
-    function testTokenFunctionality() public {
-        // Create token
+    function testAddAndRemoveFromAVSTokens() public {
+        vm.startPrank(owner);
+
+        // Create a token
+        address tokenAddress = factory.createToken("My Token", "MTK", 1_000_000 * 1e18, address(0));
+        assertTrue(factory.AVSTokens(tokenAddress));
+
+        // Remove token from AVSTokens
+        factory.removeFromAVSTokens(tokenAddress);
+        assertFalse(factory.AVSTokens(tokenAddress));
+
+        // Add token back to AVSTokens
+        factory.addToAVSTokens(tokenAddress);
+        assertTrue(factory.AVSTokens(tokenAddress));
+
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_NonOwnerTriesToAddToAVSTokens() public {
+        vm.startPrank(owner);
+
+        // Create a token
+        address tokenAddress = factory.createToken("My Token", "MTK", 1_000_000 * 1e18, address(0));
+
+        vm.stopPrank();
+
+        // Try to add token to AVSTokens as non-owner
         vm.prank(alice);
-        address tokenAddress = factory.createToken("Test", "TST", 1000000 * 1e18);
-        Token token = Token(tokenAddress);
-        
-        // Test mint
-        vm.prank(alice);
-        token.mint(bob, 1000 * 1e18);
-        assertEq(token.balanceOf(bob), 1000 * 1e18);
-        
-        // Test burn
-        vm.prank(alice);
-        token.burn(1000 * 1e18);
-        assertEq(token.balanceOf(alice), 999000 * 1e18);
-        
-        // Test transfer
-        vm.prank(alice);
-        token.transfer(bob, 1000 * 1e18);
-        assertEq(token.balanceOf(bob), 2000 * 1e18);
+        // vm.expectRevert("Ownable: caller is not the owner");
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", alice));
+        factory.addToAVSTokens(tokenAddress);
     }
 
     function test_RevertWhen_ZeroInitialSupply() public {
-        vm.prank(alice);
-        vm.expectRevert("Initial supply must be greater than 0");
-        factory.createToken("Zero Token", "ZERO", 0);
-    }
+        vm.startPrank(owner);
 
-    function testCreateTokenWithMaxSupply() public {
-        uint256 maxSupply = type(uint256).max;
-        vm.prank(alice);
-        address tokenAddress = factory.createToken("Max Token", "MAX", maxSupply);
-        Token token = Token(tokenAddress);
-        assertEq(token.totalSupply(), maxSupply);
+        // Attempt to create a token with zero initial supply
+        vm.expectRevert("Initial supply must be greater than 0");
+        factory.createToken("Zero Token", "ZERO", 0, address(0));
+
+        vm.stopPrank();
     }
 
     function testGetTokensByUser() public {
+        vm.startPrank(owner);
+
         // Create multiple tokens for alice
-        vm.startPrank(alice);
-        address token1 = factory.createToken("Token1", "TK1", 1000000 * 1e18);
-        address token2 = factory.createToken("Token2", "TK2", 2000000 * 1e18);
-        vm.stopPrank();
+        address token1 = factory.createToken("Token1", "TK1", 1_000_000 * 1e18, alice);
+        address token2 = factory.createToken("Token2", "TK2", 2_000_000 * 1e18, alice);
 
         // Get user's tokens
         address[] memory userTokens = factory.getTokensByUser(alice);
         assertEq(userTokens.length, 2);
         assertEq(userTokens[0], token1);
         assertEq(userTokens[1], token2);
+
+        vm.stopPrank();
     }
 
     function testGetTotalTokenCount() public {
         assertEq(factory.getTotalTokenCount(), 0);
 
-        vm.prank(alice);
-        factory.createToken("Token1", "TK1", 1000000 * 1e18);
+        vm.startPrank(owner);
+
+        // Create tokens
+        factory.createToken("Token1", "TK1", 1_000_000 * 1e18, address(0));
         assertEq(factory.getTotalTokenCount(), 1);
 
-        vm.prank(bob);
-        factory.createToken("Token2", "TK2", 2000000 * 1e18);
+        factory.createToken("Token2", "TK2", 2_000_000 * 1e18, address(0));
         assertEq(factory.getTotalTokenCount(), 2);
+
+        vm.stopPrank();
     }
 }

@@ -17,28 +17,4 @@ contract Token is ERC20, Ownable {
     function burn(uint256 amount) public onlyOwner {
         _burn(msg.sender, amount);
     }
-
-    function totalSupply() public view override returns (uint256) {
-        return super.totalSupply();
-    }
-
-    function balanceOf(address account) public view override returns (uint256) {
-        return super.balanceOf(account);
-    }
-
-    function transfer(address to, uint256 amount) public override returns (bool) {
-        return super.transfer(to, amount);
-    }
-
-    function approve(address spender, uint256 amount) public override returns (bool) {
-        return super.approve(spender, amount);
-    }
-
-    function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
-        return super.transferFrom(from, to, amount);
-    }
-
-    function allowance(address owner, address spender) public view override returns (uint256) {
-        return super.allowance(owner, spender);
-    }
 }

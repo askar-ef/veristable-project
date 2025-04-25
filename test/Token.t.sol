@@ -23,6 +23,7 @@ contract TokenTest is Test {
         assertEq(token.totalSupply(), 1000000 * 1e18);
         assertEq(token.balanceOf(owner), 1000000 * 1e18);
         assertEq(token.owner(), owner);
+        console.log("ea");
     }
 
     function testMintAsOwner() public {

@@ -14,17 +14,29 @@ contract VeristableAVSTest is Test {
     Token public tokenContract;
     address public alice = makeAddr("alice");
 
-    function setUp() public {
+    // function setUp() public {
+    //     // Deploy TokenFactory and VeristableAVS
+    //     factory = new TokenFactory();
+    //     avs = new VeristableAVS(address(factory));
+
+    //     // Create a registered token
+    //     token = factory.createToken("Test Token", "TEST", msg.sender);
+    //     tokenContract = Token(token);
+
+    //     // Transfer tokens to the test contract for testing
+    //     tokenContract.transfer(address(this), 1000e18);
+    // }
+        function setUp() public {
         // Deploy TokenFactory and VeristableAVS
         factory = new TokenFactory();
         avs = new VeristableAVS(address(factory));
 
         // Create a registered token
-        token = factory.createToken("Test Token", "TEST", 1000e18, msg.sender);
+        token = factory.createToken("Test Token", "TEST", address(this));
         tokenContract = Token(token);
-
-        // Transfer tokens to the test contract for testing
-        tokenContract.transfer(address(this), 1000e18);
+        
+        // Mint tokens untuk testing
+        tokenContract.mint(address(this), 1000e18);
     }
 
     function test_underwrite() public {
@@ -132,7 +144,9 @@ contract VeristableAVSTest is Test {
 
     function test_RevertWhen_UnderwritingUnregisteredToken() public {
         // Create an unregistered token
-        Token unregisteredToken = new Token("Unregistered", "UNREG", 1000e18, address(this));
+        Token unregisteredToken = new Token("Unregistered", "UNREG", address(this));
+        // cek lagi
+        tokenContract.mint(address(unregisteredToken), 100e18);
 
         // Attempt to underwrite unregistered token
         vm.expectRevert(VeristableAVS.NotRegisteredToken.selector);

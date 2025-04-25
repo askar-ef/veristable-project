@@ -23,22 +23,19 @@ contract TokenFactory is Ownable {
      * @notice Create a new token
      * @param name Name of the token
      * @param symbol Symbol of the token
-     * @param initialSupply Initial supply of the token
      * @param tokenOwner Address of the token owner (optional, defaults to msg.sender)
      */
     function createToken(
         string memory name,
         string memory symbol,
-        uint256 initialSupply,
         address tokenOwner
     ) public onlyOwner returns (address) {
-        require(initialSupply > 0, "Initial supply must be greater than 0");
 
         // If no tokenOwner is provided, default to msg.sender
         address owner = tokenOwner == address(0) ? msg.sender : tokenOwner;
 
         // Deploy new token
-        Token newToken = new Token(name, symbol, initialSupply, owner);
+        Token newToken = new Token(name, symbol, owner);
 
         // Store token address in user's tokens list
         userTokens[owner].push(address(newToken));

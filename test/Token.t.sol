@@ -14,7 +14,8 @@ contract TokenTest is Test {
         owner = address(this);
         user = address(0x1);
         spender = address(0x2);
-        token = new Token("Test Token", "TEST", 1000000 * 1e18, owner);
+        token = new Token("Test Token", "TEST", owner);
+        token.mint(owner, 1000000 * 1e18);
     }
 
     function testInitialSetup() public view {

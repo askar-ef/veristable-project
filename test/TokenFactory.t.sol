@@ -27,8 +27,9 @@ contract TokenFactoryTest is Test {
         vm.startPrank(owner);
 
         // Create a token with default owner (msg.sender)
-        address tokenAddress = factory.createToken("My Token", "MTK", 1_000_000 * 1e18, address(0));
+        address tokenAddress = factory.createToken("My Token", "MTK", address(0));
         Token newToken = Token(tokenAddress);
+        newToken.mint(owner, 1_000_000 * 1e18); // Mint 1 million tokens to the contract owner for testing purpos
 
         // Verify token properties
         assertEq(newToken.name(), "My Token");
@@ -49,20 +50,18 @@ contract TokenFactoryTest is Test {
         vm.stopPrank();
     }
 
-    function testCreateTokenWithCustomOwner() public {
+     function testCreateTokenWithCustomOwner() public {
         vm.startPrank(owner);
 
         // Create a token with custom owner (alice)
-        address tokenAddress = factory.createToken("Custom Token", "CTKN", 1_000_000 * 1e18, alice);
+        address tokenAddress = factory.createToken("Custom Token", "CTKN", alice);
         Token newToken = Token(tokenAddress);
 
         // Verify token properties
         assertEq(newToken.name(), "Custom Token");
         assertEq(newToken.symbol(), "CTKN");
-        assertEq(newToken.totalSupply(), 1_000_000 * 1e18);
-        assertEq(newToken.balanceOf(alice), 1_000_000 * 1e18);
         assertEq(newToken.owner(), alice);
-
+        
         // Verify AVSTokens mapping
         assertTrue(factory.AVSTokens(tokenAddress));
 
@@ -79,8 +78,8 @@ contract TokenFactoryTest is Test {
         vm.startPrank(owner);
 
         // Create tokens for different users
-        address token1Address = factory.createToken("Token1", "TK1", 1_000_000 * 1e18, alice);
-        address token2Address = factory.createToken("Token2", "TK2", 2_000_000 * 1e18, bob);
+        address token1Address = factory.createToken("Token1", "TK1", alice);
+        address token2Address = factory.createToken("Token2", "TK2", bob);
 
         Token token1 = Token(token1Address);
         Token token2 = Token(token2Address);
@@ -89,9 +88,7 @@ contract TokenFactoryTest is Test {
         assertTrue(token1Address != token2Address);
         assertEq(token1.owner(), alice);
         assertEq(token2.owner(), bob);
-        assertEq(token1.balanceOf(alice), 1_000_000 * 1e18);
-        assertEq(token2.balanceOf(bob), 2_000_000 * 1e18);
-
+        
         // Verify token tracking for both users
         assertEq(factory.getUserTokenCount(alice), 1);
         assertEq(factory.getUserTokenCount(bob), 1);
@@ -109,7 +106,7 @@ contract TokenFactoryTest is Test {
         vm.startPrank(owner);
 
         // Create a token
-        address tokenAddress = factory.createToken("My Token", "MTK", 1_000_000 * 1e18, address(0));
+        address tokenAddress = factory.createToken("My Token", "MTK", address(0));
         assertTrue(factory.AVSTokens(tokenAddress));
 
         // Remove token from AVSTokens
@@ -127,7 +124,7 @@ contract TokenFactoryTest is Test {
         vm.startPrank(owner);
 
         // Create a token
-        address tokenAddress = factory.createToken("My Token", "MTK", 1_000_000 * 1e18, address(0));
+        address tokenAddress = factory.createToken("My Token", "MTK", address(0));
 
         vm.stopPrank();
 
@@ -138,22 +135,12 @@ contract TokenFactoryTest is Test {
         factory.addToAVSTokens(tokenAddress);
     }
 
-    function test_RevertWhen_ZeroInitialSupply() public {
-        vm.startPrank(owner);
-
-        // Attempt to create a token with zero initial supply
-        vm.expectRevert("Initial supply must be greater than 0");
-        factory.createToken("Zero Token", "ZERO", 0, address(0));
-
-        vm.stopPrank();
-    }
-
     function testGetTokensByUser() public {
         vm.startPrank(owner);
 
         // Create multiple tokens for alice
-        address token1 = factory.createToken("Token1", "TK1", 1_000_000 * 1e18, alice);
-        address token2 = factory.createToken("Token2", "TK2", 2_000_000 * 1e18, alice);
+        address token1 = factory.createToken("Token1", "TK1", alice);
+        address token2 = factory.createToken("Token2", "TK2", alice);
 
         // Get user's tokens
         address[] memory userTokens = factory.getTokensByUser(alice);
@@ -170,10 +157,10 @@ contract TokenFactoryTest is Test {
         vm.startPrank(owner);
 
         // Create tokens
-        factory.createToken("Token1", "TK1", 1_000_000 * 1e18, address(0));
+        factory.createToken("Token1", "TK1", address(0));
         assertEq(factory.getTotalTokenCount(), 1);
 
-        factory.createToken("Token2", "TK2", 2_000_000 * 1e18, address(0));
+        factory.createToken("Token2", "TK2", address(0));
         assertEq(factory.getTotalTokenCount(), 2);
 
         vm.stopPrank();

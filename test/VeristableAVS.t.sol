@@ -14,18 +14,6 @@ contract VeristableAVSTest is Test {
     Token public tokenContract;
     address public alice = makeAddr("alice");
 
-    // function setUp() public {
-    //     // Deploy TokenFactory and VeristableAVS
-    //     factory = new TokenFactory();
-    //     avs = new VeristableAVS(address(factory));
-
-    //     // Create a registered token
-    //     token = factory.createToken("Test Token", "TEST", msg.sender);
-    //     tokenContract = Token(token);
-
-    //     // Transfer tokens to the test contract for testing
-    //     tokenContract.transfer(address(this), 1000e18);
-    // }
         function setUp() public {
         // Deploy TokenFactory and VeristableAVS
         factory = new TokenFactory();

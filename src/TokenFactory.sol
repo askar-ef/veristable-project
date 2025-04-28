@@ -10,7 +10,7 @@ contract TokenFactory is Ownable {
     mapping(address => address[]) public userTokens;
     mapping(address => bool) public AVSTokens; // Mapping to mark valid tokens
     // Array to store all created tokens
-    address[] public allTokens;
+    // address[] public allTokens;
 
     event TokenCreated(address indexed tokenAddress, string name, string symbol, address owner);
     event TokenAddedToAVS(address indexed tokenAddress);
@@ -39,7 +39,7 @@ contract TokenFactory is Ownable {
 
         // Store token address in user's tokens list
         userTokens[owner].push(address(newToken));
-        allTokens.push(address(newToken));
+        // allTokens.push(address(newToken));
 
         // Mark token as valid in AVSTokens
         AVSTokens[address(newToken)] = true;
@@ -96,15 +96,15 @@ contract TokenFactory is Ownable {
      * @notice Get all tokens created through this factory
      * @return List of all token addresses
      */
-    function getAllTokens() public view returns (address[] memory) {
-        return allTokens;
-    }
+    // function getAllTokens() public view returns (address[] memory) {
+    //     return allTokens;
+    // }
 
     /**
      * @notice Get total number of all tokens
      * @return Total count of all tokens
      */
-    function getTotalTokenCount() public view returns (uint256) {
-        return allTokens.length;
-    }
+    // function getTotalTokenCount() public view returns (uint256) {
+    //     return allTokens.length;
+    // }
 }

@@ -12,7 +12,7 @@ contract VeristableAVSDeploy is Script {
         
         // Deploy VeristableAVS dengan alamat TokenFactory sebagai parameter
         // Pastikan TokenFactory sudah di-deploy terlebih dahulu
-        address tokenFactoryAddress = 0x5418fc891317C20f923ccB431d9B040D14987bD8; // Ganti dengan alamat TokenFactory yang sudah di-deploy
+        address tokenFactoryAddress = 0x9C34c7d588C2db8f5f4626C5e8C6E51cffFDF9e1; // Ganti dengan alamat TokenFactory yang sudah di-deploy
         new VeristableAVS(tokenFactoryAddress);
         
         vm.stopBroadcast();

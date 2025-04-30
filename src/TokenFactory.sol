@@ -29,7 +29,7 @@ contract TokenFactory is Ownable {
         string memory name,
         string memory symbol,
         address tokenOwner
-    ) public onlyOwner returns (address) {
+    ) public returns (address) {
 
         // If no tokenOwner is provided, default to msg.sender
         address owner = tokenOwner == address(0) ? msg.sender : tokenOwner;
@@ -39,7 +39,6 @@ contract TokenFactory is Ownable {
 
         // Store token address in user's tokens list
         userTokens[owner].push(address(newToken));
-        // allTokens.push(address(newToken));
 
         // Mark token as valid in AVSTokens
         AVSTokens[address(newToken)] = true;

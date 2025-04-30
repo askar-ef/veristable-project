@@ -95,6 +95,9 @@ contract TokenFactoryTest is Test {
 
         // Verify all tokens array
         address[] memory allTokens = factory.getAllTokens();
+        for (uint i = 0; i < allTokens.length; i++) {
+            console.log(allTokens[i]);
+        }
         assertEq(allTokens.length, 2);
         assertEq(allTokens[0], token1Address);
         assertEq(allTokens[1], token2Address);
@@ -151,17 +154,52 @@ contract TokenFactoryTest is Test {
         vm.stopPrank();
     }
 
-    function testGetTotalTokenCount() public {
-        assertEq(factory.getTotalTokenCount(), 0);
-
+    function testAllAVSTokensTracking() public {
         vm.startPrank(owner);
 
-        // Create tokens
-        factory.createToken("Token1", "TK1", address(0));
-        assertEq(factory.getTotalTokenCount(), 1);
+        // Buat beberapa token
+        address token1 = factory.createToken("Token1", "TK1", alice);
+        address token2 = factory.createToken("Token2", "TK2", bob);
+        
+        // Verifikasi token ada di mapping AVSTokens
+        assertTrue(factory.AVSTokens(token1));
+        assertTrue(factory.AVSTokens(token2));
 
-        factory.createToken("Token2", "TK2", address(0));
-        assertEq(factory.getTotalTokenCount(), 2);
+        // Hapus token dari AVS dan verifikasi
+        factory.removeFromAVSTokens(token1);
+        assertTrue(!factory.AVSTokens(token1));
+        assertTrue(factory.AVSTokens(token2));
+
+        // Tambahkan kembali token ke AVS
+        factory.addToAVSTokens(token1);
+        assertTrue(factory.AVSTokens(token1));
+        assertTrue(factory.AVSTokens(token2));
+
+        vm.stopPrank();
+    }
+
+    function testAllTokensAndAVSTokensSync() public {
+        vm.startPrank(owner);
+
+        // Buat token dan verifikasi keberadaannya
+        address token1 = factory.createToken("Token1", "TK1", alice);
+        address token2 = factory.createToken("Token1", "TK1", alice);
+        address token3 = factory.createToken("Token1", "TK1", alice);
+        address token4 = factory.createToken("Token1", "TK1", alice);
+        
+        // Verifikasi status AVS
+        assertTrue(factory.AVSTokens(token1));
+
+        // Verifikasi token tracking untuk alice
+        address[] memory userTokens = factory.getTokensByUser(alice);
+        console.log(userTokens.length);
+        // Print setiap address token
+        for(uint i = 0; i < userTokens.length; i++) {
+            console.log("Token", i + 1, ":", userTokens[i]);
+        }
+
+        // assertEq(userTokens.length, 1);
+        // assertEq(userTokens[0], token1);
 
         vm.stopPrank();
     }

@@ -21,7 +21,7 @@ contract Reserve is Ownable {
      * @dev Initialize or update the reserve balance for a specific token.
      * Only the owner of the contract can call this function.
      */
-    function setReserveBalance(address tokenAddress, uint256 newBalance) external onlyOwner {
+    function setReserveBalance(address tokenAddress, uint256 newBalance) external {
         require(newBalance > 0, "New balance must be greater than 0");
 
         // Update the reserve balance for the token

@@ -5,155 +5,168 @@ import {TokenFactory} from "./TokenFactory.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract VeristableAVS {
+    error NotRegisteredToken();
+    error InsufficientBalance();
+    error NotOwner();
+    error ContractPaused();
+    error NoRewardsAvailable();
+    error InsufficientETH();
+    error WithdrawFailed();
+    error StakingLocked();
 
-  error NotRegisteredToken();
-  error InsufficientBalance();
-  error NotOwner();
-  error ContractPaused();
-  error NoRewardsAvailable();
+    TokenFactory public factory;
 
-  TokenFactory public factory;
+    // token -> staker -> ETH amount
+    mapping(address => mapping(address => uint256)) public tokenStakes;
+    
+    // token -> total ETH staked
+    mapping(address => uint256) public totalTokenStakes;
+    
+    // Minimum ETH required per token stake
+    uint256 public constant MIN_TOKEN_STAKE = 0.01 ether;
 
-  // token -> underwriter -> amount
-  mapping(address => mapping(address => uint128)) public underwritingAmounts;
+    // token -> rewards pool
+    mapping(address => uint256) public tokenRewardsPools;
 
-  // token -> total underwritten amount
-  mapping(address => uint128) public totalUnderwriting;
+    // token -> staker -> pending rewards
+    mapping(address => mapping(address => uint256)) public pendingTokenRewards;
 
-  // token -> total rewards available
-  mapping(address => uint128) public totalRewards;
+    // token -> staker -> last stake timestamp
+    mapping(address => mapping(address => uint256)) public lastStakeTime;
 
-  // token -> underwriter -> unclaimed rewards
-  mapping(address => mapping(address => uint128)) public unclaimedRewards;
+    // Locking period for stakes (1 hours)
+    uint256 public constant LOCK_PERIOD = 2 minutes;
 
-  // Pause state
-  bool public paused;
+    // Pause state
+    bool public paused;
 
-  // Owner of the contract
-  address public owner;
+    // Owner of the contract
+    address public owner;
 
-  constructor(address _factory) {
-    factory = TokenFactory(_factory);
-    owner = msg.sender;
-  }
+    event TokenStaked(address indexed token, address indexed staker, uint256 amount);
+    event TokenUnstaked(address indexed token, address indexed staker, uint256 amount);
+    event RewardsClaimed(address indexed token, address indexed claimer, uint256 amount);
+    event RewardsDistributed(address indexed token, uint256 amount);
 
-  modifier onlyOwner() {
-    if (msg.sender != owner) revert NotOwner();
-    _;
-  }
+    constructor(address _factory) {
+        factory = TokenFactory(_factory);
+        owner = msg.sender;
+    }
 
-  modifier whenNotPaused() {
-    if (paused) revert ContractPaused();
-    _;
-  }
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
 
-  /**
-   * @notice Function to underwrite tokens
-   * @param token Address of the token to underwrite
-   * @param amount Amount of tokens to underwrite
-   */
-  function underwrite(address token, uint128 amount) public whenNotPaused {
-    if (!factory.AVSTokens(token)) revert NotRegisteredToken();
-    address underwriter = msg.sender;
+    modifier whenNotPaused() {
+        if (paused) revert ContractPaused();
+        _;
+    }
 
-    // Update rewards before modifying underwriting amounts
-    _updateRewards(token, underwriter);
+    /**
+     * @notice Function to stake ETH for specific token
+     * @param token Address of the token to stake for
+     */
+    function stakeForToken(address token) external payable whenNotPaused {
+        if (!factory.AVSTokens(token)) revert NotRegisteredToken();
+        if (msg.value < MIN_TOKEN_STAKE) revert InsufficientETH();
+        
+        _updateRewards(token, msg.sender);
+        
+        tokenStakes[token][msg.sender] += msg.value;
+        totalTokenStakes[token] += msg.value;
+        lastStakeTime[token][msg.sender] = block.timestamp;
+        
+        emit TokenStaked(token, msg.sender, msg.value);
+    }
 
-    // Transfer tokens from underwriter to contract
-    IERC20(token).transferFrom(underwriter, address(this), amount);
+    /**
+     * @notice Function to unstake ETH from specific token
+     * @param token Address of the token
+     * @param amount Amount of ETH to unstake
+     */
+    function unstakeFromToken(address token, uint256 amount) external whenNotPaused {
+        if (tokenStakes[token][msg.sender] < amount) revert InsufficientBalance();
+        if (block.timestamp < lastStakeTime[token][msg.sender] + LOCK_PERIOD) revert StakingLocked();
+        
+        _updateRewards(token, msg.sender);
+        
+        tokenStakes[token][msg.sender] -= amount;
+        totalTokenStakes[token] -= amount;
+        
+        (bool success, ) = msg.sender.call{value: amount}("");
+        if (!success) revert WithdrawFailed();
+        
+        emit TokenUnstaked(token, msg.sender, amount);
+    }
 
-    underwritingAmounts[token][underwriter] += amount;
-    totalUnderwriting[token] += amount;
-  }
+    /**
+     * @notice Function to claim rewards for specific token
+     * @param token Address of the token
+     */
+    function claimTokenRewards(address token) external whenNotPaused {
+        _updateRewards(token, msg.sender);
+        
+        uint256 rewards = pendingTokenRewards[token][msg.sender];
+        if (rewards == 0) revert NoRewardsAvailable();
+        
+        pendingTokenRewards[token][msg.sender] = 0;
+        
+        (bool success, ) = msg.sender.call{value: rewards}("");
+        if (!success) revert WithdrawFailed();
+        
+        emit RewardsClaimed(token, msg.sender, rewards);
+    }
 
-  
-  /**
-   * @notice Function to withdraw underwritten tokens
-   * @param token Address of the token to withdraw
-   * @param amount Amount of tokens to withdraw
-   */
-  function withdraw(address token, uint128 amount) public whenNotPaused {
-    address underwriter = msg.sender;
+    /**
+     * @notice Internal function to update rewards for a token staker
+     */
+    function _updateRewards(address token, address staker) internal {
+        uint256 totalStaked = totalTokenStakes[token];
+        if (totalStaked == 0) return;
+        
+        uint256 stakerAmount = tokenStakes[token][staker];
+        if (stakerAmount == 0) return;
 
-    // Update rewards before modifying underwriting amounts
-    _updateRewards(token, underwriter);
+        uint256 rewardsPool = tokenRewardsPools[token];
+        uint256 newRewards = (rewardsPool * stakerAmount) / totalStaked;
+        if (newRewards == 0) return;
 
-    if (underwritingAmounts[token][underwriter] < amount) revert InsufficientBalance();
-    underwritingAmounts[token][underwriter] -= amount;
-    totalUnderwriting[token] -= amount;
+        pendingTokenRewards[token][staker] += newRewards;
+        tokenRewardsPools[token] -= newRewards;
+    }
 
-    // Transfer tokens back to the underwriter
-    IERC20(token).transfer(underwriter, amount);
-  }
+    /**
+     * @notice Function to distribute rewards for specific token
+     * @param token Address of the token
+     */
+    function distributeTokenRewards(address token) external payable onlyOwner {
+        tokenRewardsPools[token] += msg.value;
+        emit RewardsDistributed(token, msg.value);
+    }
 
-  /**
-   * @notice Function to claim rewards
-   * @param token Address of the token for which rewards are claimed
-   */
-  function claimRewards(address token) public whenNotPaused {
-    address underwriter = msg.sender;
+    /**
+     * @notice Function to pause the contract
+     */
+    function pause() external onlyOwner {
+        paused = true;
+    }
 
-    // Update rewards before claiming
-    _updateRewards(token, underwriter);
+    /**
+     * @notice Function to unpause the contract
+     */
+    function unpause() external onlyOwner {
+        paused = false;
+    }
 
-    uint128 rewardsToClaim = unclaimedRewards[token][underwriter];
-    if (rewardsToClaim == 0) revert NoRewardsAvailable();
+    /**
+     * @notice Function to transfer ownership of the contract
+     */
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Invalid address");
+        owner = newOwner;
+    }
 
-    unclaimedRewards[token][underwriter] = 0;
-
-    // Transfer rewards to the underwriter
-    IERC20(token).transfer(underwriter, rewardsToClaim);
-  }
-
-  /**
-   * @notice Function to deposit rewards (only callable by owner)
-   * @param token Address of the token to deposit rewards
-   * @param amount Amount of rewards to deposit
-   */
-  function depositRewards(address token, uint128 amount) public onlyOwner {
-    totalRewards[token] += amount;
-    IERC20(token).transferFrom(msg.sender, address(this), amount);
-  }
-
-  /**
-   * @notice Internal function to update rewards for an underwriter
-   * @param token Address of the token
-   * @param underwriter Address of the underwriter
-   */
-  function _updateRewards(address token, address underwriter) internal {
-    uint128 totalUnderwritten = totalUnderwriting[token];
-    if (totalUnderwritten == 0) return;
-
-    uint128 underwriterAmount = underwritingAmounts[token][underwriter];
-    if (underwriterAmount == 0) return;  // Skip if underwriter has no stake
-
-    uint128 newRewards = uint128((uint256(totalRewards[token]) * uint256(underwriterAmount)) / uint256(totalUnderwritten));
-    if (newRewards == 0) return;  // Skip if no rewards to claim
-
-    unclaimedRewards[token][underwriter] += newRewards;
-    totalRewards[token] -= newRewards;
-  }
-
-  /**
-   * @notice Function to pause the contract
-   */
-  function pause() public onlyOwner {
-    paused = true;
-  }
-
-  /**
-   * @notice Function to unpause the contract
-   */
-  function unpause() public onlyOwner {
-    paused = false;
-  }
-
-  /**
-   * @notice Function to transfer ownership of the contract
-   * @param newOwner Address of the new owner
-   */
-  function transferOwnership(address newOwner) public onlyOwner {
-    require(newOwner != address(0), "Invalid address");
-    owner = newOwner;
-  }
+    receive() external payable {}
+    fallback() external payable {}
 }

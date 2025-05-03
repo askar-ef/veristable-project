@@ -13,159 +13,126 @@ contract VeristableAVSTest is Test {
     address public token;
     Token public tokenContract;
     address public alice = makeAddr("alice");
+    address public bob = makeAddr("bob");
 
-        function setUp() public {
-        // Deploy TokenFactory and VeristableAVS
+    function setUp() public {
+        // Deploy contracts
         factory = new TokenFactory();
         avs = new VeristableAVS(address(factory));
 
-        // Create a registered token
+        // Create test token
         token = factory.createToken("Test Token", "TEST", address(this));
         tokenContract = Token(token);
+
+        // Give ETH to test accounts
+        vm.deal(alice, 10 ether);
+        vm.deal(bob, 10 ether);
+    }
+
+    function test_StakeForToken() public {
+        vm.prank(alice);
+        avs.stakeForToken{value: 1 ether}(token);
         
-        // Mint tokens untuk testing
-        tokenContract.mint(address(this), 1000e18);
+        assertEq(avs.tokenStakes(token, alice), 1 ether);
+        assertEq(avs.totalTokenStakes(token), 1 ether);
     }
 
-    function test_underwrite() public {
-        console.log("Balance before underwrite: ", tokenContract.balanceOf(address(this)));
-        console.log("Total underwriting amount:", avs.underwritingAmounts(token, address(this)));
-        // Approve AVS to spend tokens
-        tokenContract.approve(address(avs), 100e18);
-        // Underwrite tokens
-        avs.underwrite(token, 100e18);
-        console.log("Balance after underwrite: ",tokenContract.balanceOf(address(this)));
-        console.log("Total underwriting amount:", avs.underwritingAmounts(token, address(this)));
-        // Check underwriting amounts
-        assertEq(avs.underwritingAmounts(token, address(this)), 100e18);
-        assertEq(avs.totalUnderwriting(token), 100e18);
+    function test_RevertWhen_StakeInsufficientETH() public {
+        vm.prank(alice);
+        vm.expectRevert(VeristableAVS.InsufficientETH.selector);
+        avs.stakeForToken{value: 0.009 ether}(token);
     }
 
-    function test_underwriteMultiple() public {
-        // Approve AVS to spend tokens
-        tokenContract.approve(address(avs), 150e18);
-
-        // Underwrite tokens multiple times
-        avs.underwrite(token, 100e18);
-        avs.underwrite(token, 50e18);
-
-        // Check underwriting amounts
-        assertEq(avs.underwritingAmounts(token, address(this)), 150e18);
-        assertEq(avs.totalUnderwriting(token), 150e18);
-    }
-
-    function test_withdraw() public {
-        // Approve AVS to spend tokens
-        tokenContract.approve(address(avs), 100e18);
-
-        // Underwrite tokens
-        avs.underwrite(token, 100e18);
-
-        // Withdraw tokens
-        avs.withdraw(token, 50e18);
-
-        // Check underwriting amounts and balance
-        assertEq(avs.underwritingAmounts(token, address(this)), 50e18);
-        assertEq(avs.totalUnderwriting(token), 50e18);
-        assertEq(tokenContract.balanceOf(address(this)), 950e18); // 1000 - 100 + 50
-    }
-
-    function test_RevertWhen_WithdrawInsufficientBalance() public {
-        // Approve AVS to spend tokens
-        tokenContract.approve(address(avs), 100e18);
-
-        // Underwrite tokens
-        avs.underwrite(token, 100e18);
-
-        // Attempt to withdraw more than underwritten amount
-        vm.expectRevert(VeristableAVS.InsufficientBalance.selector);
-        avs.withdraw(token, 200e18);
-    }
-
-    function test_depositRewards() public {
-        // Mint additional tokens for rewards
-        console.log("Token supply:", tokenContract.totalSupply());
-        tokenContract.mint(address(this), 200e18);
-        tokenContract.approve(address(avs), 200e18);
-        
-        console.log("Token supply:", tokenContract.totalSupply());
-
-        // Deposit rewards as owner
-        vm.prank(address(this)); // Simulate owner
-        avs.depositRewards(token, 100e18);
-
-        console.log("Total rewards:", avs.totalRewards(token)); // Add this line for debugging
-        console.log("Unclaimed rewards:", avs.unclaimedRewards(token, address(this))); // Add this line for debugging
-        console.log("Underwriting amount:", avs.underwritingAmounts(token, address(this))); // Add this line for debugging
-        console.log("Balance:", tokenContract.balanceOf(address(this))); // Add this line for debugging
-
-        // Check total rewards
-        assertEq(avs.totalRewards(token), 100e18);
-    }
-
-    function test_claimRewards() public {
-        // Approve AVS to spend tokens
-        tokenContract.approve(address(avs), 100e18);
-
-        // Underwrite tokens
-        avs.underwrite(token, 100e18);
-
-        // Deposit rewards
-        tokenContract.mint(address(this), 100e18);
-        tokenContract.approve(address(avs), 100e18);
-        vm.prank(address(this)); // Simulate owner
-        avs.depositRewards(token, 100e18);
-
-        // Claim rewards
-        avs.claimRewards(token);
-
-        // Check unclaimed rewards and balance
-        assertEq(avs.unclaimedRewards(token, address(this)), 0);
-        assertEq(tokenContract.balanceOf(address(this)), 1000e18); // 900 + 100 rewards
-    }
-
-    function test_RevertWhen_ClaimNoRewardsAvailable() public {
-        // Attempt to claim rewards without depositing any
-        vm.expectRevert(VeristableAVS.NoRewardsAvailable.selector);
-        avs.claimRewards(token);
-    }
-
-    function test_RevertWhen_UnderwritingUnregisteredToken() public {
-        // Create an unregistered token
-        Token unregisteredToken = new Token("Unregistered", "UNREG", address(this));
-        // cek lagi
-        tokenContract.mint(address(unregisteredToken), 100e18);
-
-        // Attempt to underwrite unregistered token
+    function test_RevertWhen_StakeUnregisteredToken() public {
+        address fakeToken = makeAddr("fakeToken");
+        vm.prank(alice);
         vm.expectRevert(VeristableAVS.NotRegisteredToken.selector);
-        avs.underwrite(address(unregisteredToken), 100e18);
+        avs.stakeForToken{value: 1 ether}(fakeToken);
     }
 
-    function test_pauseAndUnpause() public {
-        // Pause the contract
+    function test_UnstakeFromToken() public {
+        // Setup initial stake
+        vm.prank(alice);
+        avs.stakeForToken{value: 1 ether}(token);
+        
+        // Warp time past lock period
+        vm.warp(block.timestamp + 25 hours);
+        
+        uint256 initialBalance = alice.balance;
+        
+        vm.prank(alice);
+        avs.unstakeFromToken(token, 0.5 ether);
+        
+        assertEq(avs.tokenStakes(token, alice), 0.5 ether);
+        assertEq(avs.totalTokenStakes(token), 0.5 ether);
+        assertEq(alice.balance, initialBalance + 0.5 ether);
+    }
+
+    function test_RevertWhen_UnstakeDuringLock() public {
+        vm.prank(alice);
+        avs.stakeForToken{value: 1 ether}(token);
+        
+        vm.prank(alice);
+        vm.expectRevert(VeristableAVS.StakingLocked.selector);
+        avs.unstakeFromToken(token, 0.5 ether);
+    }
+
+    function test_DistributeAndClaimRewards() public {
+        // Setup stakes
+        vm.prank(alice);
+        avs.stakeForToken{value: 1 ether}(token);
+        
+        vm.prank(bob);
+        avs.stakeForToken{value: 1 ether}(token);
+        
+        // Distribute rewards
+        avs.distributeTokenRewards{value: 2 ether}(token);
+        
+        uint256 initialBalance = alice.balance;
+        
+        // Claim rewards
+        vm.prank(alice);
+        avs.claimTokenRewards(token);
+        
+        assertEq(alice.balance, initialBalance + 1 ether);
+    }
+
+    function test_RevertWhen_ClaimNoRewards() public {
+        vm.prank(alice);
+        vm.expectRevert(VeristableAVS.NoRewardsAvailable.selector);
+        avs.claimTokenRewards(token);
+    }
+
+    function test_PauseAndUnpause() public {
         avs.pause();
-
-        // Attempt to underwrite while paused
+        assertTrue(avs.paused());
+        
+        vm.prank(alice);
         vm.expectRevert(VeristableAVS.ContractPaused.selector);
-        avs.underwrite(token, 100e18);
-
-        // Unpause the contract
+        avs.stakeForToken{value: 1 ether}(token);
+        
         avs.unpause();
-
-        // Underwrite tokens after unpausing
-        tokenContract.approve(address(avs), 100e18);
-        avs.underwrite(token, 100e18);
-
-        // Check underwriting amounts
-        assertEq(avs.underwritingAmounts(token, address(this)), 100e18);
+        assertFalse(avs.paused());
+        
+        vm.prank(alice);
+        avs.stakeForToken{value: 1 ether}(token);
+        assertEq(avs.tokenStakes(token, alice), 1 ether);
     }
 
-    function test_transferOwnership() public {
-        // Transfer ownership to a new address
-        address newOwner = address(0x12345);
-        avs.transferOwnership(newOwner);
-
-        // Check new owner
-        assertEq(avs.owner(), newOwner);
+    function test_TransferOwnership() public {
+        avs.transferOwnership(alice);
+        assertEq(avs.owner(), alice);
+        
+        vm.prank(alice);
+        avs.pause();
+        assertTrue(avs.paused());
     }
+
+    function test_RevertWhen_NonOwnerAction() public {
+        vm.prank(alice);
+        vm.expectRevert(VeristableAVS.NotOwner.selector);
+        avs.pause();
+    }
+
+    receive() external payable {}
 }

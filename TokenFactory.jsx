@@ -10,11 +10,15 @@ const TokenFactoryABI = [
   "function getUserTokenCount(address user) public view returns (uint256)",
 ];
 
+// by grok
 const TokenABI = [
   "function mint(address to, uint256 amount) public",
   "function burn(uint256 amount) public",
   "function balanceOf(address account) public view returns (uint256)",
   "function symbol() public view returns (string)",
+  "function approve(address spender, uint256 amount) public returns (bool)",
+  "function transferOwnership(address newOwner) public",
+  "function owner() public view returns (address)",
 ];
 
 const ReserveABI = [
@@ -24,27 +28,29 @@ const ReserveABI = [
 ];
 
 const VeristableAVSABI = [
-  "function underwrite(address token, uint128 amount) external",
-  "function withdraw(address token, uint128 amount) external",
-  "function claimRewards(address token) external",
-  "function depositRewards(address token, uint128 amount) public",
-  "function pause() public",
-  "function unpause() public",
-  "function transferOwnership(address newOwner) public",
-  "function paused() public view returns (bool)",
-  "function owner() public view returns (address)",
-  "function underwritingAmounts(address token, address underwriter) public view returns (uint128)",
-  "function totalUnderwriting(address token) public view returns (uint128)",
-  "function totalRewards(address token) public view returns (uint128)",
-  "function unclaimedRewards(address token, address underwriter) public view returns (uint128)",
+  "function stakeForToken(address token) external payable",
+  "function unstakeFromToken(address token, uint256 amount) external",
+  "function claimTokenRewards(address token) external",
+  "function distributeTokenRewards(address token) external payable",
+  "function pause() external",
+  "function unpause() external",
+  "function transferOwnership(address newOwner) external",
+  "function paused() external view returns (bool)",
+  "function owner() external view returns (address)",
+  "function tokenStakes(address token, address staker) external view returns (uint256)",
+  "function totalTokenStakes(address token) external view returns (uint256)",
+  "function tokenRewardsPools(address token) external view returns (uint256)",
+  "function pendingTokenRewards(address token, address staker) external view returns (uint256)",
+  "function MIN_TOKEN_STAKE() external view returns (uint256)",
 ];
 
-// Alamat Kontrak di Pharos Network
-const factoryAddress = "0x5418fc891317C20f923ccB431d9B040D14987bD8";
-const reserveAddress = "0x32e26c6880e652599A20CF8eb672FDd9179114FC";
-const veristableAVSAddress = "0x7F3AC11808D1ADd56Abe48603D7ee16cAB970060";
+// Alamat Kontrak di Pharos Network (NEW)
+const factoryAddress = "0x9C34c7d588C2db8f5f4626C5e8C6E51cffFDF9e1";
+const reserveAddress = "0xb080914D90A76EC677a9d288e9BF03B9a052769d";
+const veristableAVSAddress = "0x9Ec9eb3E56B0B66948dB51ce98A56cA7a5b49Ad7";
 
 const TokenFactory = () => {
+  // State Management
   const [account, setAccount] = useState("");
   const [provider, setProvider] = useState(null);
   const [userTokens, setUserTokens] = useState([]);
@@ -68,27 +74,43 @@ const TokenFactory = () => {
   const [unclaimedRewards, setUnclaimedRewards] = useState("0");
   const [totalUnderwriting, setTotalUnderwriting] = useState("0");
   const [totalRewards, setTotalRewards] = useState("0");
+  const [isLoading, setIsLoading] = useState(false);
+  const [newTokenOwner, setNewTokenOwner] = useState("");
+  const [tokenOwner, setTokenOwner] = useState("");
+  const [ethStake, setEthStake] = useState("0");
+  const [totalEthStaked, setTotalEthStaked] = useState("0");
+  const [ethRewardsPool, setEthRewardsPool] = useState("0");
+  const [pendingRewards, setPendingRewards] = useState("0");
+  const [stakeAmount, setStakeAmount] = useState("");
+  const [unstakeAmount, setUnstakeAmount] = useState("");
+  const [minEthStake, setMinEthStake] = useState("0");
 
-  // Koneksi Wallet
+  // Validasi alamat Ethereum
+  const isValidAddress = (address) => ethers.utils.isAddress(address);
+
+  // Wallet Functions
   const connectWallet = async () => {
     try {
-      if (window.ethereum) {
-        await window.ethereum.request({ method: "eth_requestAccounts" });
-        const provider = new ethers.providers.Web3Provider(window.ethereum);
-        const signer = provider.getSigner();
-        const address = await signer.getAddress();
-        setAccount(address);
-        setProvider(provider);
-        await loadUserTokens(address, provider);
-        await checkContractStatus(provider);
-      }
+      if (!window.ethereum) throw new Error("No wallet detected");
+      setIsLoading(true);
+      await window.ethereum.request({ method: "eth_requestAccounts" });
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
+      const signer = provider.getSigner();
+      const address = await signer.getAddress();
+      setAccount(address);
+      setProvider(provider);
+      await Promise.all([
+        loadUserTokens(address, provider),
+        checkContractStatus(provider),
+      ]);
     } catch (error) {
       console.error("Error connecting wallet:", error);
-      alert("Failed to connect wallet: " + error.message);
+      alert(`Failed to connect wallet: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Load User Tokens
   const loadUserTokens = async (address, provider) => {
     try {
       const factory = new ethers.Contract(
@@ -96,8 +118,10 @@ const TokenFactory = () => {
         TokenFactoryABI,
         provider
       );
-      const tokens = await factory.getTokensByUser(address);
-      const tokenCount = await factory.getUserTokenCount(address);
+      const [tokens, tokenCount] = await Promise.all([
+        factory.getTokensByUser(address),
+        factory.getUserTokenCount(address),
+      ]);
       setUserTokens(tokens);
       setUserTokenCount(tokenCount.toString());
     } catch (error) {
@@ -105,7 +129,6 @@ const TokenFactory = () => {
     }
   };
 
-  // Check Contract Status (Paused/Owner)
   const checkContractStatus = async (provider) => {
     try {
       const avs = new ethers.Contract(
@@ -113,8 +136,7 @@ const TokenFactory = () => {
         VeristableAVSABI,
         provider
       );
-      const isPaused = await avs.paused();
-      const owner = await avs.owner();
+      const [isPaused, owner] = await Promise.all([avs.paused(), avs.owner()]);
       setContractPaused(isPaused);
       setContractOwner(owner);
     } catch (error) {
@@ -122,14 +144,14 @@ const TokenFactory = () => {
     }
   };
 
-  // Create Token
+  // Token Management Functions
   const createToken = async () => {
     try {
-      if (!provider) return;
-      if (!tokenName || !tokenSymbol) {
+      if (!provider || !tokenName || !tokenSymbol) {
         alert("Nama token dan symbol harus diisi!");
         return;
       }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const factory = new ethers.Contract(
         factoryAddress,
@@ -146,47 +168,121 @@ const TokenFactory = () => {
       alert("Token created successfully!");
     } catch (error) {
       console.error("Error creating token:", error);
-      alert("Failed to create token: " + error.message);
+      alert(`Failed to create token: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Mint Token
+  const checkTokenOwner = async () => {
+    try {
+      if (!provider || !selectedToken) {
+        alert("Pilih token terlebih dahulu!");
+        return;
+      }
+      const token = new ethers.Contract(selectedToken, TokenABI, provider);
+      const owner = await token.owner();
+      setTokenOwner(owner);
+      alert(`Owner of token ${selectedToken}: ${owner}`);
+    } catch (error) {
+      console.error("Error checking token owner:", error);
+      alert(`Failed to check token owner: ${error.message}`);
+    }
+  };
+
   const mintToken = async () => {
     try {
-      if (!provider || !selectedToken) return;
+      if (
+        !provider ||
+        !selectedToken ||
+        !mintAmount ||
+        parseFloat(mintAmount) <= 0
+      ) {
+        alert("Pilih token dan masukkan jumlah yang valid!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const token = new ethers.Contract(selectedToken, TokenABI, signer);
       const tx = await token.mint(account, ethers.utils.parseEther(mintAmount));
       await tx.wait();
       await getTokenInfo(selectedToken);
+      setMintAmount("");
       alert("Tokens minted successfully!");
     } catch (error) {
       console.error("Error minting token:", error);
-      alert("Failed to mint token: " + error.message);
+      alert(`Failed to mint token: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Burn Token
   const burnToken = async () => {
     try {
-      if (!provider || !selectedToken) return;
+      if (
+        !provider ||
+        !selectedToken ||
+        !burnAmount ||
+        parseFloat(burnAmount) <= 0
+      ) {
+        alert("Pilih token dan masukkan jumlah yang valid!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const token = new ethers.Contract(selectedToken, TokenABI, signer);
       const tx = await token.burn(ethers.utils.parseEther(burnAmount));
       await tx.wait();
       await getTokenInfo(selectedToken);
+      setBurnAmount("");
       alert("Tokens burned successfully!");
     } catch (error) {
       console.error("Error burning token:", error);
-      alert("Failed to burn token: " + error.message);
+      alert(`Failed to burn token: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Set Reserve Balance
-  // const setReserveBalance = async () => {
+  const transferTokenOwnership = async () => {
+    try {
+      if (
+        !provider ||
+        !selectedToken ||
+        !newTokenOwner ||
+        !isValidAddress(newTokenOwner)
+      ) {
+        alert("Pilih token dan masukkan alamat owner baru yang valid!");
+        return;
+      }
+      setIsLoading(true);
+      const signer = provider.getSigner();
+      const token = new ethers.Contract(selectedToken, TokenABI, signer);
+      const tx = await token.transferOwnership(newTokenOwner);
+      await tx.wait();
+      setNewTokenOwner("");
+      alert("Token ownership transferred successfully!");
+    } catch (error) {
+      console.error("Error transferring token ownership:", error);
+      alert(`Failed to transfer token ownership: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Reserve Functions
   const updateReserveBalance = async () => {
     try {
-      if (!provider || !selectedToken) return;
+      if (
+        !provider ||
+        !selectedToken ||
+        !newReserveBalance ||
+        parseFloat(newReserveBalance) <= 0
+      ) {
+        alert("Pilih token dan masukkan jumlah reserve balance yang valid!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const reserve = new ethers.Contract(reserveAddress, ReserveABI, signer);
       const tx = await reserve.setReserveBalance(
@@ -195,20 +291,24 @@ const TokenFactory = () => {
       );
       await tx.wait();
       await getReserveBalance(selectedToken);
+      setNewReserveBalance("");
       alert("Reserve balance updated!");
     } catch (error) {
       console.error("Error setting reserve balance:", error);
-      alert("Failed to set reserve balance: " + error.message);
+      alert(`Failed to set reserve balance: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Get Reserve Balance dan Last Update Timestamp
   const getReserveBalance = async (tokenAddress) => {
     try {
-      if (!provider) return;
+      if (!provider || !tokenAddress) return;
       const reserve = new ethers.Contract(reserveAddress, ReserveABI, provider);
-      const balance = await reserve.getReserveBalance(tokenAddress);
-      const timestamp = await reserve.getLastUpdateTimestamp();
+      const [balance, timestamp] = await Promise.all([
+        reserve.getReserveBalance(tokenAddress),
+        reserve.getLastUpdateTimestamp(),
+      ]);
       setReserveBalance(ethers.utils.formatEther(balance));
       setLastUpdateTimestamp(new Date(timestamp * 1000).toLocaleString());
     } catch (error) {
@@ -216,38 +316,64 @@ const TokenFactory = () => {
     }
   };
 
-  // Underwrite Tokens
+  // Underwriting Functions
+  // by grok
   const underwriteTokens = async () => {
     try {
-      if (!provider || !selectedToken) return;
+      if (
+        !provider ||
+        !selectedToken ||
+        !underwriteAmount ||
+        parseFloat(underwriteAmount) <= 0
+      ) {
+        alert("Pilih token dan masukkan jumlah yang valid!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
+      const token = new ethers.Contract(selectedToken, TokenABI, signer);
       const avs = new ethers.Contract(
         veristableAVSAddress,
         VeristableAVSABI,
         signer
       );
-      const token = new ethers.Contract(selectedToken, TokenABI, signer);
-      await token.approve(
+
+      // Approve token untuk VeristableAVS
+      const approveTx = await token.approve(
         veristableAVSAddress,
         ethers.utils.parseEther(underwriteAmount)
       );
-      const tx = await avs.underwrite(
+      await approveTx.wait(); // Tunggu hingga transaksi approve dikonfirmasi
+
+      // Panggil fungsi underwrite
+      const underwriteTx = await avs.underwrite(
         selectedToken,
         ethers.utils.parseEther(underwriteAmount)
       );
-      await tx.wait();
+      await underwriteTx.wait();
       await getTokenInfo(selectedToken);
+      setUnderwriteAmount("");
       alert("Tokens underwritten successfully!");
     } catch (error) {
       console.error("Error underwriting tokens:", error);
-      alert("Failed to underwrite tokens: " + error.message);
+      alert(`Failed to underwrite tokens: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Withdraw Tokens
   const withdrawTokens = async () => {
     try {
-      if (!provider || !selectedToken) return;
+      if (
+        !provider ||
+        !selectedToken ||
+        !withdrawAmount ||
+        parseFloat(withdrawAmount) <= 0
+      ) {
+        alert("Pilih token dan masukkan jumlah yang valid!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const avs = new ethers.Contract(
         veristableAVSAddress,
@@ -260,17 +386,23 @@ const TokenFactory = () => {
       );
       await tx.wait();
       await getTokenInfo(selectedToken);
+      setWithdrawAmount("");
       alert("Tokens withdrawn successfully!");
     } catch (error) {
       console.error("Error withdrawing tokens:", error);
-      alert("Failed to withdraw tokens: " + error.message);
+      alert(`Failed to withdraw tokens: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Claim Rewards
   const claimRewards = async () => {
     try {
-      if (!provider || !selectedToken) return;
+      if (!provider || !selectedToken) {
+        alert("Pilih token terlebih dahulu!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const avs = new ethers.Contract(
         veristableAVSAddress,
@@ -283,14 +415,24 @@ const TokenFactory = () => {
       alert("Rewards claimed successfully!");
     } catch (error) {
       console.error("Error claiming rewards:", error);
-      alert("Failed to claim rewards: " + error.message);
+      alert(`Failed to claim rewards: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Deposit Rewards
   const depositRewards = async () => {
     try {
-      if (!provider || !selectedToken) return;
+      if (
+        !provider ||
+        !selectedToken ||
+        !depositRewardAmount ||
+        parseFloat(depositRewardAmount) <= 0
+      ) {
+        alert("Pilih token dan masukkan jumlah yang valid!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const avs = new ethers.Contract(
         veristableAVSAddress,
@@ -308,17 +450,24 @@ const TokenFactory = () => {
       );
       await tx.wait();
       await getTokenInfo(selectedToken);
+      setDepositRewardAmount("");
       alert("Rewards deposited successfully!");
     } catch (error) {
       console.error("Error depositing rewards:", error);
-      alert("Failed to deposit rewards: " + error.message);
+      alert(`Failed to deposit rewards: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Add to AVS Tokens
+  // AVS Token Management Functions
   const addToAVSTokens = async () => {
     try {
-      if (!provider) return;
+      if (!provider || !avsTokenAddress || !isValidAddress(avsTokenAddress)) {
+        alert("Masukkan alamat token yang valid!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const factory = new ethers.Contract(
         factoryAddress,
@@ -327,17 +476,23 @@ const TokenFactory = () => {
       );
       const tx = await factory.addToAVSTokens(avsTokenAddress);
       await tx.wait();
+      setAvsTokenAddress("");
       alert("Token added to AVS!");
     } catch (error) {
       console.error("Error adding to AVS tokens:", error);
-      alert("Failed to add to AVS tokens: " + error.message);
+      alert(`Failed to add to AVS tokens: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Remove from AVS Tokens
   const removeFromAVSTokens = async () => {
     try {
-      if (!provider) return;
+      if (!provider || !avsTokenAddress || !isValidAddress(avsTokenAddress)) {
+        alert("Masukkan alamat token yang valid!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const factory = new ethers.Contract(
         factoryAddress,
@@ -346,17 +501,24 @@ const TokenFactory = () => {
       );
       const tx = await factory.removeFromAVSTokens(avsTokenAddress);
       await tx.wait();
+      setAvsTokenAddress("");
       alert("Token removed from AVS!");
     } catch (error) {
       console.error("Error removing from AVS tokens:", error);
-      alert("Failed to remove from AVS tokens: " + error.message);
+      alert(`Failed to remove from AVS tokens: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Pause Contract
+  // Admin Functions
   const pauseContract = async () => {
     try {
-      if (!provider) return;
+      if (!provider) {
+        alert("Wallet belum terhubung!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const avs = new ethers.Contract(
         veristableAVSAddress,
@@ -369,14 +531,19 @@ const TokenFactory = () => {
       alert("Contract paused!");
     } catch (error) {
       console.error("Error pausing contract:", error);
-      alert("Failed to pause contract: " + error.message);
+      alert(`Failed to pause contract: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Unpause Contract
   const unpauseContract = async () => {
     try {
-      if (!provider) return;
+      if (!provider) {
+        alert("Wallet belum terhubung!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const avs = new ethers.Contract(
         veristableAVSAddress,
@@ -389,14 +556,19 @@ const TokenFactory = () => {
       alert("Contract unpaused!");
     } catch (error) {
       console.error("Error unpausing contract:", error);
-      alert("Failed to unpause contract: " + error.message);
+      alert(`Failed to unpause contract: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Transfer Ownership
   const transferOwnership = async () => {
     try {
-      if (!provider) return;
+      if (!provider || !newOwnerAddress || !isValidAddress(newOwnerAddress)) {
+        alert("Masukkan alamat owner baru yang valid!");
+        return;
+      }
+      setIsLoading(true);
       const signer = provider.getSigner();
       const avs = new ethers.Contract(
         veristableAVSAddress,
@@ -406,28 +578,34 @@ const TokenFactory = () => {
       const tx = await avs.transferOwnership(newOwnerAddress);
       await tx.wait();
       setContractOwner(newOwnerAddress);
+      setNewOwnerAddress("");
       alert("Ownership transferred!");
     } catch (error) {
       console.error("Error transferring ownership:", error);
-      alert("Failed to transfer ownership: " + error.message);
+      alert(`Failed to transfer ownership: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Get Token Info (Balance, Underwriting, Rewards)
+  // Token Info Function
   const getTokenInfo = async (tokenAddress) => {
     try {
-      if (!provider || !tokenAddress) return;
+      if (!provider || !tokenAddress || !account) return;
       const token = new ethers.Contract(tokenAddress, TokenABI, provider);
       const avs = new ethers.Contract(
         veristableAVSAddress,
         VeristableAVSABI,
         provider
       );
-      const balance = await token.balanceOf(account);
-      const underwriting = await avs.underwritingAmounts(tokenAddress, account);
-      const rewards = await avs.unclaimedRewards(tokenAddress, account);
-      const totalUnder = await avs.totalUnderwriting(tokenAddress);
-      const totalRew = await avs.totalRewards(tokenAddress);
+      const [balance, underwriting, rewards, totalUnder, totalRew] =
+        await Promise.all([
+          token.balanceOf(account),
+          avs.underwritingAmounts(tokenAddress, account),
+          avs.unclaimedRewards(tokenAddress, account),
+          avs.totalUnderwriting(tokenAddress),
+          avs.totalRewards(tokenAddress),
+        ]);
       setUserBalance(ethers.utils.formatEther(balance));
       setUnclaimedRewards(ethers.utils.formatEther(rewards));
       setTotalUnderwriting(ethers.utils.formatEther(totalUnder));
@@ -439,11 +617,301 @@ const TokenFactory = () => {
 
   // Update info saat selectedToken berubah
   useEffect(() => {
-    if (selectedToken) {
+    if (selectedToken && provider && account) {
       getReserveBalance(selectedToken);
       getTokenInfo(selectedToken);
     }
-  }, [selectedToken]);
+  }, [selectedToken, provider, account]);
+
+  // Komponen UI
+  const TokenSelector = ({ value, onChange }) => (
+    <select
+      className="w-full p-2 border rounded"
+      value={value}
+      onChange={onChange}
+      disabled={isLoading}
+    >
+      <option value="">Select Token</option>
+      {userTokens.map((token) => (
+        <option key={token} value={token}>
+          {token}
+        </option>
+      ))}
+    </select>
+  );
+
+  const stakeETH = async () => {
+    try {
+      if (!provider || !stakeAmount || parseFloat(stakeAmount) <= 0) {
+        alert("Masukkan jumlah ETH yang valid untuk di-stake!");
+        return;
+      }
+      setIsLoading(true);
+      const signer = provider.getSigner();
+      const avs = new ethers.Contract(
+        veristableAVSAddress,
+        VeristableAVSABI,
+        signer
+      );
+      const tx = await avs.stakeETH({
+        value: ethers.utils.parseEther(stakeAmount),
+      });
+      await tx.wait();
+      await updateStakingInfo();
+      setStakeAmount("");
+      alert("ETH berhasil di-stake!");
+    } catch (error) {
+      console.error("Error staking ETH:", error);
+      alert(`Gagal melakukan stake ETH: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const unstakeETH = async () => {
+    try {
+      if (!provider || !unstakeAmount || parseFloat(unstakeAmount) <= 0) {
+        alert("Masukkan jumlah ETH yang valid untuk di-unstake!");
+        return;
+      }
+      setIsLoading(true);
+      const signer = provider.getSigner();
+      const avs = new ethers.Contract(
+        veristableAVSAddress,
+        VeristableAVSABI,
+        signer
+      );
+      const tx = await avs.unstakeETH(ethers.utils.parseEther(unstakeAmount));
+      await tx.wait();
+      await updateStakingInfo();
+      setUnstakeAmount("");
+      alert("ETH berhasil di-unstake!");
+    } catch (error) {
+      console.error("Error unstaking ETH:", error);
+      alert(`Gagal melakukan unstake ETH: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const claimETHRewards = async () => {
+    try {
+      if (!provider) {
+        alert("Silakan hubungkan wallet terlebih dahulu!");
+        return;
+      }
+      setIsLoading(true);
+      const signer = provider.getSigner();
+      const avs = new ethers.Contract(
+        veristableAVSAddress,
+        VeristableAVSABI,
+        signer
+      );
+      const tx = await avs.claimETHRewards();
+      await tx.wait();
+      await updateStakingInfo();
+      alert("ETH rewards berhasil di-claim!");
+    } catch (error) {
+      console.error("Error claiming ETH rewards:", error);
+      alert(`Gagal melakukan claim rewards: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const updateStakingInfo = async () => {
+    try {
+      if (!provider || !account) return;
+      const avs = new ethers.Contract(
+        veristableAVSAddress,
+        VeristableAVSABI,
+        provider
+      );
+      const [userStake, totalStaked, rewardsPool, pending, minStake] =
+        await Promise.all([
+          avs.ethStakes(account),
+          avs.totalETHStaked(),
+          avs.ethRewardsPool(),
+          avs.pendingETHRewards(account),
+          avs.MIN_ETH_STAKE(),
+        ]);
+
+      setEthStake(ethers.utils.formatEther(userStake));
+      setTotalEthStaked(ethers.utils.formatEther(totalStaked));
+      setEthRewardsPool(ethers.utils.formatEther(rewardsPool));
+      setPendingRewards(ethers.utils.formatEther(pending));
+      setMinEthStake(ethers.utils.formatEther(minStake));
+    } catch (error) {
+      console.error("Error updating staking info:", error);
+    }
+  };
+
+  // Fungsi untuk stake ETH ke token
+  const stakeForToken = async () => {
+    try {
+      if (
+        !provider ||
+        !selectedToken ||
+        !stakeAmount ||
+        parseFloat(stakeAmount) <= 0
+      ) {
+        alert("Pilih token dan masukkan jumlah stake yang valid!");
+        return;
+      }
+      setIsLoading(true);
+      const signer = provider.getSigner();
+      const avs = new ethers.Contract(
+        veristableAVSAddress,
+        VeristableAVSABI,
+        signer
+      );
+      const tx = await avs.stakeForToken(selectedToken, {
+        value: ethers.utils.parseEther(stakeAmount),
+      });
+      await tx.wait();
+      await getTokenInfo(selectedToken);
+      setStakeAmount("");
+      alert("ETH berhasil di-stake!");
+    } catch (error) {
+      console.error("Error staking ETH:", error);
+      alert(`Gagal melakukan stake: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Fungsi untuk unstake ETH dari token
+  const unstakeFromToken = async () => {
+    try {
+      if (
+        !provider ||
+        !selectedToken ||
+        !unstakeAmount ||
+        parseFloat(unstakeAmount) <= 0
+      ) {
+        alert("Pilih token dan masukkan jumlah unstake yang valid!");
+        return;
+      }
+      setIsLoading(true);
+      const signer = provider.getSigner();
+      const avs = new ethers.Contract(
+        veristableAVSAddress,
+        VeristableAVSABI,
+        signer
+      );
+      const tx = await avs.unstakeFromToken(
+        selectedToken,
+        ethers.utils.parseEther(unstakeAmount)
+      );
+      await tx.wait();
+      await getTokenInfo(selectedToken);
+      setUnstakeAmount("");
+      alert("ETH berhasil di-unstake!");
+    } catch (error) {
+      console.error("Error unstaking ETH:", error);
+      alert(`Gagal melakukan unstake: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Fungsi untuk claim rewards
+  const claimTokenRewards = async () => {
+    try {
+      if (!provider || !selectedToken) {
+        alert("Pilih token terlebih dahulu!");
+        return;
+      }
+      setIsLoading(true);
+      const signer = provider.getSigner();
+      const avs = new ethers.Contract(
+        veristableAVSAddress,
+        VeristableAVSABI,
+        signer
+      );
+      const tx = await avs.claimTokenRewards(selectedToken);
+      await tx.wait();
+      await getTokenInfo(selectedToken);
+      alert("Rewards berhasil di-claim!");
+    } catch (error) {
+      console.error("Error claiming rewards:", error);
+      alert(`Gagal melakukan claim rewards: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Fungsi untuk mendistribusikan rewards (hanya owner)
+  const distributeTokenRewards = async () => {
+    try {
+      if (
+        !provider ||
+        !selectedToken ||
+        !depositRewardAmount ||
+        parseFloat(depositRewardAmount) <= 0
+      ) {
+        alert("Pilih token dan masukkan jumlah reward yang valid!");
+        return;
+      }
+      setIsLoading(true);
+      const signer = provider.getSigner();
+      const avs = new ethers.Contract(
+        veristableAVSAddress,
+        VeristableAVSABI,
+        signer
+      );
+      const tx = await avs.distributeTokenRewards(selectedToken, {
+        value: ethers.utils.parseEther(depositRewardAmount),
+      });
+      await tx.wait();
+      await getTokenInfo(selectedToken);
+      setDepositRewardAmount("");
+      alert("Rewards berhasil didistribusikan!");
+    } catch (error) {
+      console.error("Error distributing rewards:", error);
+      alert(`Gagal mendistribusikan rewards: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Fungsi untuk mengambil informasi token dan stake
+  const getTokenInfo = async (tokenAddress) => {
+    try {
+      if (!provider || !tokenAddress || !account) return;
+
+      const avs = new ethers.Contract(
+        veristableAVSAddress,
+        VeristableAVSABI,
+        provider
+      );
+      const token = new ethers.Contract(tokenAddress, TokenABI, provider);
+
+      const [stakeAmount, totalStaked, rewardsPool, pendingRewards, minStake] =
+        await Promise.all([
+          avs.tokenStakes(tokenAddress, account),
+          avs.totalTokenStakes(tokenAddress),
+          avs.tokenRewardsPools(tokenAddress),
+          avs.pendingTokenRewards(tokenAddress, account),
+          avs.MIN_TOKEN_STAKE(),
+        ]);
+
+      setEthStake(ethers.utils.formatEther(stakeAmount));
+      setTotalEthStaked(ethers.utils.formatEther(totalStaked));
+      setEthRewardsPool(ethers.utils.formatEther(rewardsPool));
+      setPendingRewards(ethers.utils.formatEther(pendingRewards));
+      setMinEthStake(ethers.utils.formatEther(minStake));
+    } catch (error) {
+      console.error("Error getting token info:", error);
+    }
+  };
+
+  // Tambahkan useEffect untuk memperbarui informasi staking
+  useEffect(() => {
+    if (provider && account) {
+      updateStakingInfo();
+    }
+  }, [provider, account]);
 
   return (
     <div className="min-h-screen bg-gray-100 p-8">
@@ -453,12 +921,13 @@ const TokenFactory = () => {
           {!account ? (
             <button
               onClick={connectWallet}
-              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-blue-300"
+              disabled={isLoading}
             >
-              Connect Wallet
+              {isLoading ? "Connecting..." : "Connect Wallet"}
             </button>
           ) : (
-            <p className="font-mono">{account}</p>
+            <p className="font-mono text-sm truncate">{account}</p>
           )}
         </div>
 
@@ -474,6 +943,7 @@ const TokenFactory = () => {
                   className="w-full p-2 border rounded"
                   value={tokenName}
                   onChange={(e) => setTokenName(e.target.value)}
+                  disabled={isLoading}
                 />
                 <input
                   type="text"
@@ -481,12 +951,14 @@ const TokenFactory = () => {
                   className="w-full p-2 border rounded"
                   value={tokenSymbol}
                   onChange={(e) => setTokenSymbol(e.target.value)}
+                  disabled={isLoading}
                 />
                 <button
                   onClick={createToken}
-                  className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 w-full"
+                  className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 w-full disabled:bg-green-300"
+                  disabled={isLoading}
                 >
-                  Create Token
+                  {isLoading ? "Processing..." : "Create Token"}
                 </button>
               </div>
             </div>
@@ -495,18 +967,10 @@ const TokenFactory = () => {
             <div className="bg-white p-6 rounded-lg shadow">
               <h2 className="text-xl font-semibold mb-4">Mint/Burn Token</h2>
               <div className="space-y-4">
-                <select
-                  className="w-full p-2 border rounded"
+                <TokenSelector
                   value={selectedToken}
                   onChange={(e) => setSelectedToken(e.target.value)}
-                >
-                  <option value="">Select Token</option>
-                  {userTokens.map((token) => (
-                    <option key={token} value={token}>
-                      {token}
-                    </option>
-                  ))}
-                </select>
+                />
                 <p>Your Balance: {userBalance} Tokens</p>
                 <input
                   type="number"
@@ -514,12 +978,14 @@ const TokenFactory = () => {
                   className="w-full p-2 border rounded"
                   value={mintAmount}
                   onChange={(e) => setMintAmount(e.target.value)}
+                  disabled={isLoading}
                 />
                 <button
                   onClick={mintToken}
-                  className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 w-full"
+                  className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 w-full disabled:bg-purple-300"
+                  disabled={isLoading}
                 >
-                  Mint Token
+                  {isLoading ? "Processing..." : "Mint Token"}
                 </button>
                 <input
                   type="number"
@@ -527,12 +993,29 @@ const TokenFactory = () => {
                   className="w-full p-2 border rounded"
                   value={burnAmount}
                   onChange={(e) => setBurnAmount(e.target.value)}
+                  disabled={isLoading}
                 />
                 <button
                   onClick={burnToken}
-                  className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 w-full"
+                  className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 w-full disabled:bg-red-300"
+                  disabled={isLoading}
                 >
-                  Burn Token
+                  {isLoading ? "Processing..." : "Burn Token"}
+                </button>
+                <input
+                  type="text"
+                  placeholder="New Token Owner Address"
+                  className="w-full p-2 border rounded"
+                  value={newTokenOwner}
+                  onChange={(e) => setNewTokenOwner(e.target.value)}
+                  disabled={isLoading}
+                />
+                <button
+                  onClick={transferTokenOwnership}
+                  className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 w-full disabled:bg-gray-300"
+                  disabled={isLoading}
+                >
+                  {isLoading ? "Processing..." : "Transfer Token Ownership"}
                 </button>
               </div>
             </div>
@@ -541,18 +1024,10 @@ const TokenFactory = () => {
             <div className="bg-white p-6 rounded-lg shadow">
               <h2 className="text-xl font-semibold mb-4">Reserve Management</h2>
               <div className="space-y-4">
-                <select
-                  className="w-full p-2 border rounded"
+                <TokenSelector
                   value={selectedToken}
                   onChange={(e) => setSelectedToken(e.target.value)}
-                >
-                  <option value="">Select Token</option>
-                  {userTokens.map((token) => (
-                    <option key={token} value={token}>
-                      {token}
-                    </option>
-                  ))}
-                </select>
+                />
                 <p>Reserve Balance: {reserveBalance} ETH</p>
                 <p>Last Update: {lastUpdateTimestamp}</p>
                 <input
@@ -561,15 +1036,14 @@ const TokenFactory = () => {
                   className="w-full p-2 border rounded"
                   value={newReserveBalance}
                   onChange={(e) => setNewReserveBalance(e.target.value)}
+                  disabled={isLoading}
                 />
                 <button
-                  onClick={setReserveBalance}
-                  className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 w-full"
+                  onClick={updateReserveBalance}
+                  className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 w-full disabled:bg-blue-300"
+                  disabled={isLoading}
                 >
-                  Set Reserve Balance
-                </button>
-                <button onClick={updateReserveBalance}>
-                  Set Reserve Balance
+                  {isLoading ? "Processing..." : "Set Reserve Balance"}
                 </button>
               </div>
             </div>
@@ -580,18 +1054,10 @@ const TokenFactory = () => {
                 Underwrite & Rewards
               </h2>
               <div className="space-y-4">
-                <select
-                  className="w-full p-2 border rounded"
+                <TokenSelector
                   value={selectedToken}
                   onChange={(e) => setSelectedToken(e.target.value)}
-                >
-                  <option value="">Select Token</option>
-                  {userTokens.map((token) => (
-                    <option key={token} value={token}>
-                      {token}
-                    </option>
-                  ))}
-                </select>
+                />
                 <p>Unclaimed Rewards: {unclaimedRewards} Tokens</p>
                 <p>Total Underwriting: {totalUnderwriting} Tokens</p>
                 <p>Total Rewards: {totalRewards} Tokens</p>
@@ -601,12 +1067,14 @@ const TokenFactory = () => {
                   className="w-full p-2 border rounded"
                   value={underwriteAmount}
                   onChange={(e) => setUnderwriteAmount(e.target.value)}
+                  disabled={isLoading}
                 />
                 <button
                   onClick={underwriteTokens}
-                  className="bg-teal-500 text-white px-4 py-2 rounded hover:bg-teal-600 w-full"
+                  className="bg-teal-500 text-white px-4 py-2 rounded hover:bg-teal-600 w-full disabled:bg-teal-300"
+                  disabled={isLoading}
                 >
-                  Underwrite Tokens
+                  {isLoading ? "Processing..." : "Underwrite Tokens"}
                 </button>
                 <input
                   type="number"
@@ -614,18 +1082,21 @@ const TokenFactory = () => {
                   className="w-full p-2 border rounded"
                   value={withdrawAmount}
                   onChange={(e) => setWithdrawAmount(e.target.value)}
+                  disabled={isLoading}
                 />
                 <button
                   onClick={withdrawTokens}
-                  className="bg-orange-500 text-white px-4 py-2 rounded hover:bg-orange-600 w-full"
+                  className="bg-orange-500 text-white px-4 py-2 rounded hover:bg-orange-600 w-full disabled:bg-orange-300"
+                  disabled={isLoading}
                 >
-                  Withdraw Tokens
+                  {isLoading ? "Processing..." : "Withdraw Tokens"}
                 </button>
                 <button
                   onClick={claimRewards}
-                  className="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600 w-full"
+                  className="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600 w-full disabled:bg-yellow-300"
+                  disabled={isLoading}
                 >
-                  Claim Rewards
+                  {isLoading ? "Processing..." : "Claim Rewards"}
                 </button>
                 <input
                   type="number"
@@ -633,12 +1104,81 @@ const TokenFactory = () => {
                   className="w-full p-2 border rounded"
                   value={depositRewardAmount}
                   onChange={(e) => setDepositRewardAmount(e.target.value)}
+                  disabled={isLoading}
                 />
                 <button
                   onClick={depositRewards}
-                  className="bg-cyan-500 text-white px-4 py-2 rounded hover:bg-cyan-600 w-full"
+                  className="bg-cyan-500 text-white px-4 py-2 rounded hover:bg-cyan-600 w-full disabled:bg-cyan-300"
+                  disabled={isLoading}
                 >
-                  Deposit Rewards
+                  {isLoading ? "Processing..." : "Deposit Rewards"}
+                </button>
+              </div>
+            </div>
+
+            {/* Token Staking Section */}
+            <div className="bg-white p-6 rounded-lg shadow-md">
+              <h2 className="text-xl font-semibold mb-4">Token Staking</h2>
+              <div className="space-y-4">
+                <TokenSelector
+                  value={selectedToken}
+                  onChange={(e) => setSelectedToken(e.target.value)}
+                />
+                <p>Stake Amount: {ethStake} ETH</p>
+                <p>Total Staked: {totalEthStaked} ETH</p>
+                <p>Pending Rewards: {pendingRewards} ETH</p>
+                <p>Rewards Pool: {ethRewardsPool} ETH</p>
+                <input
+                  type="number"
+                  placeholder="Jumlah ETH untuk Stake"
+                  className="w-full p-2 border rounded"
+                  value={stakeAmount}
+                  onChange={(e) => setStakeAmount(e.target.value)}
+                  disabled={isLoading}
+                />
+                <button
+                  onClick={stakeForToken}
+                  className="bg-green-500 text-white px-4 py-2 rounded w-full hover:bg-green-600 disabled:bg-green-300"
+                  disabled={isLoading}
+                >
+                  Stake ETH ke Token
+                </button>
+                <input
+                  type="number"
+                  placeholder="Jumlah ETH untuk Unstake"
+                  className="w-full p-2 border rounded"
+                  value={unstakeAmount}
+                  onChange={(e) => setUnstakeAmount(e.target.value)}
+                  disabled={isLoading}
+                />
+                <button
+                  onClick={unstakeFromToken}
+                  className="bg-red-500 text-white px-4 py-2 rounded w-full hover:bg-red-600 disabled:bg-red-300"
+                  disabled={isLoading}
+                >
+                  Unstake ETH dari Token
+                </button>
+                <button
+                  onClick={claimTokenRewards}
+                  className="bg-yellow-500 text-white px-4 py-2 rounded w-full hover:bg-yellow-600 disabled:bg-yellow-300"
+                  disabled={isLoading}
+                >
+                  Claim Token Rewards
+                </button>
+                <input
+                  type="number"
+                  placeholder="Jumlah Reward ETH"
+                  className="w-full p-2 border rounded"
+                  value={depositRewardAmount}
+                  onChange={(e) => setDepositRewardAmount(e.target.value)}
+                  disabled={isLoading}
+                />
+                <button
+                  onClick={distributeTokenRewards}
+                  className="bg-cyan-500 text-white px-4 py-2 rounded w-full hover:bg-cyan-600 disabled:bg-cyan-300"
+                  disabled={isLoading}
+                >
+                  Distribute Token Rewards
                 </button>
               </div>
             </div>
@@ -655,18 +1195,21 @@ const TokenFactory = () => {
                   className="w-full p-2 border rounded"
                   value={avsTokenAddress}
                   onChange={(e) => setAvsTokenAddress(e.target.value)}
+                  disabled={isLoading}
                 />
                 <button
                   onClick={addToAVSTokens}
-                  className="bg-indigo-500 text-white px-4 py-2 rounded hover:bg-indigo-600 w-full"
+                  className="bg-indigo-500 text-white px-4 py-2 rounded hover:bg-indigo-600 w-full disabled:bg-indigo-300"
+                  disabled={isLoading}
                 >
-                  Add to AVS Tokens
+                  {isLoading ? "Processing..." : "Add to AVS Tokens"}
                 </button>
                 <button
                   onClick={removeFromAVSTokens}
-                  className="bg-pink-500 text-white px-4 py-2 rounded hover:bg-pink-600 w-full"
+                  className="bg-pink-500 text-white px-4 py-2 rounded hover:bg-pink-600 w-full disabled:bg-pink-300"
+                  disabled={isLoading}
                 >
-                  Remove from AVS Tokens
+                  {isLoading ? "Processing..." : "Remove from AVS Tokens"}
                 </button>
               </div>
             </div>
@@ -680,17 +1223,17 @@ const TokenFactory = () => {
                 <p>Contract Owner: {contractOwner}</p>
                 <button
                   onClick={pauseContract}
-                  className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 w-full"
-                  disabled={contractPaused}
+                  className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 w-full disabled:bg-red-300"
+                  disabled={contractPaused || isLoading}
                 >
-                  Pause Contract
+                  {isLoading ? "Processing..." : "Pause Contract"}
                 </button>
                 <button
                   onClick={unpauseContract}
-                  className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 w-full"
-                  disabled={!contractPaused}
+                  className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 w-full disabled:bg-green-300"
+                  disabled={!contractPaused || isLoading}
                 >
-                  Unpause Contract
+                  {isLoading ? "Processing..." : "Unpause Contract"}
                 </button>
                 <input
                   type="text"
@@ -698,12 +1241,14 @@ const TokenFactory = () => {
                   className="w-full p-2 border rounded"
                   value={newOwnerAddress}
                   onChange={(e) => setNewOwnerAddress(e.target.value)}
+                  disabled={isLoading}
                 />
                 <button
                   onClick={transferOwnership}
-                  className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 w-full"
+                  className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 w-full disabled:bg-gray-300"
+                  disabled={isLoading}
                 >
-                  Transfer Ownership
+                  {isLoading ? "Processing..." : "Transfer Ownership"}
                 </button>
               </div>
             </div>
@@ -712,17 +1257,33 @@ const TokenFactory = () => {
             <div className="bg-white p-6 rounded-lg shadow">
               <h2 className="text-xl font-semibold mb-4">Your Tokens</h2>
               <div className="space-y-2">
-                {userTokens.map((token) => (
-                  <div key={token} className="p-4 border rounded">
-                    <p className="font-mono">{token}</p>
-                    <button
-                      onClick={() => setSelectedToken(token)}
-                      className="mt-2 bg-blue-500 text-white px-4 py-1 rounded text-sm"
+                {userTokens.length === 0 ? (
+                  <p>No tokens found.</p>
+                ) : (
+                  userTokens.map((token) => (
+                    <div
+                      key={token}
+                      className="p-4 border rounded flex justify-between items-center"
                     >
-                      Select Token
-                    </button>
-                  </div>
-                ))}
+                      <p className="font-mono text-sm truncate">{token}</p>
+                      <button
+                        onClick={() => setSelectedToken(token)}
+                        className="bg-blue-500 text-white px-4 py-1 rounded text-sm hover:bg-blue-600 disabled:bg-blue-300"
+                        disabled={isLoading}
+                      >
+                        Select Token
+                      </button>
+                    </div>
+                  ))
+                )}
+                <button
+                  onClick={checkTokenOwner}
+                  className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 w-full disabled:bg-gray-300"
+                  disabled={isLoading || !selectedToken}
+                >
+                  {isLoading ? "Processing..." : "Check Token Owner"}
+                </button>
+                {tokenOwner && <p>Token Owner: {tokenOwner}</p>}
               </div>
             </div>
           </div>

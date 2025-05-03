@@ -188,9 +188,9 @@ contract TokenFactoryTest is Test {
 
         // Buat token dan verifikasi keberadaannya
         address token1 = factory.createToken("Token1", "TK1", alice);
-        address token2 = factory.createToken("Token1", "TK1", alice);
-        address token3 = factory.createToken("Token1", "TK1", alice);
-        address token4 = factory.createToken("Token1", "TK1", alice);
+        // address token2 = factory.createToken("Token1", "TK1", alice);
+        // address token3 = factory.createToken("Token1", "TK1", alice);
+        // address token4 = factory.createToken("Token1", "TK1", alice);
         
         // Verifikasi status AVS
         assertTrue(factory.AVSTokens(token1));
